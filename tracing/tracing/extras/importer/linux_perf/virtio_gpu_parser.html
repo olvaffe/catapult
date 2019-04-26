@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<!--
+Copyright (c) 2019 The Chromium Authors. All rights reserved.
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
+-->
+
+<link rel="import" href="/tracing/extras/importer/linux_perf/parser.html">
+
+<script>
+'use strict';
+
+/**
+ * @fileoverview Parses virtio-gpu driver events in the Linux event trace format.
+ */
+tr.exportTo('tr.e.importer.linux_perf', function() {
+  const ColorScheme = tr.b.ColorScheme;
+  const Parser = tr.e.importer.linux_perf.Parser;
+
+  /**
+   * Parses virtio-gpu trace events.
+   * @constructor
+   */
+  function VirtioGpuParser(importer) {
+    Parser.call(this, importer);
+
+    importer.registerEventHandler('virtio_gpu_cmd_queue',
+      VirtioGpuParser.prototype.traceCmd.bind(this));
+    importer.registerEventHandler('virtio_gpu_cmd_response',
+      VirtioGpuParser.prototype.traceCmd.bind(this));
+  }
+
+  const virtioGpuCmdRE =
+    /vdev=(\d+) vq=(\d+) name=(\S*) type=0x([0-9a-f]+) flags=0x([0-9a-f]+) fence_id=(\d+) ctx_id=(\d+)/;
+
+  VirtioGpuParser.prototype = {
+    __proto__: Parser.prototype,
+
+    traceCmd(eventName, cpuNumber, pid, ts, eventBase, threadName) {
+      const event = virtioGpuCmdRE.exec(eventBase.details);
+      if (!event) return false;
+
+      const isQueue = (eventName === 'virtio_gpu_cmd_queue')
+      const pseudoName = event[3] + (isQueue ? '-vq' : '-resp');
+
+      const flags = parseInt(event[5], 16);
+      const fenceId = (flags & 1) ? parseInt(event[6]) : -1;
+      const ctxId = parseInt(event[7]);
+      const sliceName = 'cmd(' + ctxId + ',' + fenceId + ')';
+      const sliceArgs = {
+        'vdev': event[1],
+        'vq': event[2],
+        'type': '0x' + event[4],
+        'flags': '0x' + event[5],
+      };
+
+      const thread = this.importer.getOrCreatePseudoThread(pseudoName).thread;
+
+      if (thread.sliceGroup.openSliceCount > 0) {
+        thread.sliceGroup.endSlice(ts);
+      }
+      thread.sliceGroup.beginSlice(null, sliceName, ts, sliceArgs);
+
+      return true;
+    },
+  };
+
+  Parser.register(VirtioGpuParser);
+
+  return {
+    VirtioGpuParser,
+  };
+});
+</script>
